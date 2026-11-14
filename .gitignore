@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+
+# Your own pictures and drawings stay out of the repo.
+*.gcode
+*_preview.png
+*.jpg
+*.jpeg
+*.webp
+.DS_Store
+
+# ...except the bundled examples.
+!examples/**/*.gcode
+!examples/**/*_preview.png
