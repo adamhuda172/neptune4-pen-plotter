@@ -2,7 +2,8 @@
 
 This assumes the hardware is done: the hotend and bed sensor are off, a pen
 is mounted in their place (print-head cable still plugged in), the paper is
-taped to the bed, and the printer is switched on.
+taped to the bed, and the printer is switched on. A printable pen holder is
+in [`hardware/`](hardware/); print it before you take the printer apart.
 
 You need a Mac or Windows computer, a USB-C cable and about 20 minutes for
 the first-time setup. After that, each new page takes about 5 minutes.

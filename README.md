@@ -48,9 +48,9 @@ starts becomes its bottom-left corner**.
 
 ## 1. Hardware
 
-* Remove the hotend/extruder and the bed-levelling sensor from the print head,
-  and mount a pen holder in their place. A **spring-loaded** holder gives the
-  most even lines. Search Printables/Thingiverse for "Neptune 4 pen holder".
+* Print the pen holder in [`hardware/`](hardware/) **before** you take the
+  printer apart. Then remove the hotend/extruder and the bed-levelling sensor
+  from the print head, and mount the holder in their place.
 * **Keep the print-head cable plugged in.** The printer shuts down with
   "ADC out of range" if the nozzle temperature sensor is disconnected. The
   hotend can hang loose. It is never heated.
