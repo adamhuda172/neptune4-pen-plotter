@@ -20,6 +20,7 @@ import gzip
 import hashlib
 import pathlib
 import random
+import shlex
 import sys
 import time
 
@@ -82,7 +83,8 @@ class Printer:
 
         self.ser.write(b"stty -echo\n")
         time.sleep(0.3)
-        self.ser.write(("base64 -d << 'B64EOF' | gunzip > '%s.tmp'\n" % dest).encode())
+        tmp, final = shlex.quote(dest + ".tmp"), shlex.quote(dest)  # names may contain ' or spaces
+        self.ser.write(("base64 -d << 'B64EOF' | gunzip > %s\n" % tmp).encode())
         time.sleep(0.2)
         # Small chunks with pauses so the printer's input buffer never overflows.
         for i in range(0, len(lines), 20):
@@ -92,9 +94,9 @@ class Printer:
         self.ser.write(b"B64EOF\n")
         time.sleep(0.8)
         self.ser.reset_input_buffer()
-        check = ("if [ \"$(md5sum < '{d}.tmp' | cut -d' ' -f1)\" = '{m}' ]; then mv '{d}.tmp' '{d}'; "
-                 "echo UPLOAD_OK; else rm -f '{d}.tmp'; echo UPLOAD_BAD; fi; stty echo\n")
-        self.ser.write(check.format(d=dest, m=md5).encode())
+        check = ("if [ \"$(md5sum < {t} | cut -d' ' -f1)\" = '{m}' ]; then mv {t} {d}; "
+                 "echo UPLOAD_OK; else rm -f {t}; echo UPLOAD_BAD; fi; stty echo\n")
+        self.ser.write(check.format(t=tmp, d=final, m=md5).encode())
         out = self._read_until("UPLOAD_", 15) or ""
         time.sleep(0.2)
         out += self.ser.read(4096).decode("utf-8", "replace")
