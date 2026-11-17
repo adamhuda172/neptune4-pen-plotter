@@ -32,7 +32,7 @@ fi
 # symbols work). On failure, print Moonraker's answer and return non-zero.
 post() {
     endpoint="$1"; shift
-    resp=$(curl -s -w '\n%{http_code}' -X POST -G "$@" "$API$endpoint") || {
+    resp=$(curl -s --max-time 10 -w '\n%{http_code}' -X POST -G "$@" "$API$endpoint") || {
         echo "Can't reach the printer's Moonraker service at $API."
         return 1
     }
@@ -48,8 +48,12 @@ post() {
 sudo systemctl stop makerbase-client || exit 1
 
 if ! post /printer/print/start --data-urlencode "filename=$FILE"; then
-    sudo systemctl start makerbase-client
-    echo "Drawing not started. The touchscreen is back on."
+    if sudo systemctl start makerbase-client; then
+        echo "Drawing not started. The touchscreen is back on."
+    else
+        echo "Drawing not started, and the touchscreen didn't restart."
+        echo "Run ~/pen/screen_on.sh, or switch the printer off and on."
+    fi
     exit 1
 fi
 sleep 1

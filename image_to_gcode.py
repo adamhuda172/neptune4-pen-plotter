@@ -13,7 +13,7 @@ from PIL import Image, ImageDraw, ImageOps
 from scipy.ndimage import gaussian_filter, gaussian_filter1d
 from skimage.filters import threshold_otsu
 from skimage.measure import approximate_polygon, label, regionprops
-from skimage.morphology import remove_small_objects, skeletonize, closing, disk
+from skimage.morphology import skeletonize, closing, disk
 
 NEIGHBOURS = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
 
@@ -27,6 +27,8 @@ def crop_to_paper(img, inset=0.012):
     bright = grey > threshold_otsu(grey)
     rows = np.nonzero(bright.mean(axis=1) > 0.6)[0]
     cols = np.nonzero(bright.mean(axis=0) > 0.6)[0]
+    if not len(rows) or not len(cols):
+        return img  # no paper edge found (e.g. a blank image): leave it as is
     dy, dx = int(inset * img.height), int(inset * img.width)
     # Only trim past the paper's edge on sides where there is background to remove.
     left = cols[0] + dx if cols[0] > 0 else 0
@@ -58,6 +60,16 @@ def open_grey(path):
     return img.convert("L")
 
 
+def drop_specks(ink, min_px):
+    """Remove blobs of fewer than `min_px` pixels, keeping ones of exactly
+    min_px. (scikit-image's remove_small_objects changed where it draws that
+    line between versions, which can lose small dots like decimal points.)"""
+    blobs = label(ink, connectivity=1)
+    keep = np.bincount(blobs.ravel()) >= min_px
+    keep[0] = False  # background
+    return keep[blobs]
+
+
 def load_ink(path, min_width=2000, threshold=None, photo=False):
     """Threshold the ink. Small images are enlarged first so thin, faint pen
     lines stay joined up and keep enough pixels to trace."""
@@ -70,7 +82,7 @@ def load_ink(path, min_width=2000, threshold=None, photo=False):
     grey = np.asarray(img, dtype=float)
     ink = grey < (threshold if threshold else threshold_otsu(grey))
     ink = closing(ink, disk(1))
-    ink = remove_small_objects(ink, max_size=4 * factor)
+    ink = drop_specks(ink, min_px=4 * factor)
     if not ink.any():
         sys.exit("No ink found in %s. If the lines are faint, try --threshold 232." % path)
     return ink, factor
