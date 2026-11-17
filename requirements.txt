@@ -1,5 +1,7 @@
-numpy
-scipy
-scikit-image
-pillow
-pyserial
+numpy>=1.24
+scipy>=1.10
+# 0.26 renamed remove_small_objects(min_size=) to max_size= and changed the
+# EllipseModel API; 0.28 removes binary_closing. Raise the cap once tested.
+scikit-image>=0.26,<0.28
+pillow>=9.1
+pyserial>=3.5

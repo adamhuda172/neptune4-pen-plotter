@@ -64,6 +64,49 @@ def box_border(ink, f):
     return border
 
 
+class RobustEllipseModel(EllipseModel):
+    """scikit-image's EllipseModel, fitted with our own direct least-squares
+    solver (Halir & Flusser). The stock solver in scikit-image 0.26 crashes
+    with recent numpy, and any 5-point sample that isn't an ellipse just
+    counts as a failed RANSAC trial here instead of raising an error."""
+
+    @classmethod
+    def from_estimate(cls, data):
+        data = np.asarray(data, dtype=float)
+        mean = data.mean(axis=0)
+        scale = data.std(axis=0).max()
+        if not scale > 0:
+            return None
+        x, y = ((data - mean) / scale).T  # normalised for numerical stability
+        d1 = np.column_stack([x * x, x * y, y * y])
+        d2 = np.column_stack([x, y, np.ones_like(x)])
+        try:
+            t = -np.linalg.solve(d2.T @ d2, d2.T @ d1)
+        except np.linalg.LinAlgError:
+            return None
+        m = d1.T @ d1 + (d1.T @ d2) @ t
+        m = np.array([m[2] / 2, -m[1], m[0] / 2])
+        vecs = np.linalg.eig(m)[1].real
+        ok = 4 * vecs[0] * vecs[2] - vecs[1] ** 2 > 0  # the ellipse solution
+        if not ok.any():
+            return None
+        a1 = vecs[:, np.argmax(ok)]
+        # Conic A x^2 + B xy + C y^2 + D x + E y + F = 0 -> centre, axes, angle.
+        A, B, C, D, E, F = np.concatenate([a1, t @ a1])
+        den = B * B - 4 * A * C
+        if den >= 0:
+            return None
+        num = 2 * (A * E * E + C * D * D - B * D * E + den * F)
+        root = np.hypot(A - C, B)
+        with np.errstate(invalid="ignore"):
+            axes = -np.sqrt(num * np.array([A + C + root, A + C - root])) / den
+        if not (np.all(np.isfinite(axes)) and np.all(axes > 0)):
+            return None
+        center = np.array([(2 * C * D - B * E) / den, (2 * A * E - B * D) / den])
+        theta = 0.5 * np.arctan2(-B, C - A)
+        return cls(center=center * scale + mean, axis_lengths=axes * scale, theta=theta)
+
+
 def fit_oval(ink, f, bbox):
     """Fit an ellipse to one hand-drawn oval, ignoring the numbers and arrows
     that sit inside or cross it, and return the ink lying on it."""
@@ -72,8 +115,10 @@ def fit_oval(ink, f, bbox):
     in_box = (cols >= x0) & (cols <= x1) & (rows >= y0) & (rows <= y1)
     r, c = np.nonzero(skeletonize(ink & in_box))
     pts = np.column_stack([c, r]).astype(float)
-    model, _ = ransac(pts, EllipseModel, min_samples=5, residual_threshold=1.5 * f,
+    model, _ = ransac(pts, RobustEllipseModel, min_samples=5, residual_threshold=1.5 * f,
                       max_trials=3000, rng=0)
+    if model is None:
+        sys.exit("Couldn't find the oval in %s; check OVALS at the top of the file." % (bbox,))
     r_all, c_all = np.nonzero(ink & in_box)
     dist = model.residuals(np.column_stack([c_all, r_all]).astype(float))
     on_oval = np.zeros_like(ink)
@@ -85,7 +130,7 @@ def oval_loop(oval_ink, model, bins=120):
     """One continuous loop following the hand-drawn oval. Around the fitted
     ellipse, measure how far out the ink really is at each angle, so the loop
     keeps the oval's hand-drawn shape but is drawn in a single motion."""
-    xc, yc, a, b, theta = model.params
+    (xc, yc), (a, b), theta = model.center, model.axis_lengths, model.theta
     r, c = np.nonzero(skeletonize(oval_ink))
     ct, st = np.cos(theta), np.sin(theta)
     u = ((c - xc) * ct + (r - yc) * st) / a

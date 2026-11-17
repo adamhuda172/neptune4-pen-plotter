@@ -6,13 +6,14 @@ Usage: python image_to_gcode.py input.png output.gcode [--width 180] [--height 1
                                 [--down 4.6] [--up 7] [--preview preview.png]
 """
 import argparse
+import sys
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 from scipy.ndimage import gaussian_filter, gaussian_filter1d
 from skimage.filters import threshold_otsu
 from skimage.measure import approximate_polygon, label, regionprops
-from skimage.morphology import remove_small_objects, skeletonize, binary_closing, closing, disk
+from skimage.morphology import skeletonize, closing, disk
 
 NEIGHBOURS = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
 
@@ -26,6 +27,8 @@ def crop_to_paper(img, inset=0.012):
     bright = grey > threshold_otsu(grey)
     rows = np.nonzero(bright.mean(axis=1) > 0.6)[0]
     cols = np.nonzero(bright.mean(axis=0) > 0.6)[0]
+    if not len(rows) or not len(cols):
+        return img  # no paper edge found (e.g. a blank image): leave it as is
     dy, dx = int(inset * img.height), int(inset * img.width)
     # Only trim past the paper's edge on sides where there is background to remove.
     left = cols[0] + dx if cols[0] > 0 else 0
@@ -45,10 +48,32 @@ def flatten_lighting(img):
     return Image.fromarray(flat.astype(np.uint8))
 
 
+def open_grey(path):
+    """Open a picture as greyscale, the right way up, on white paper."""
+    img = Image.open(path)
+    # Phone photos are often stored sideways with a tag saying how to turn them.
+    img = ImageOps.exif_transpose(img)
+    # Transparent areas would otherwise turn black and count as ink.
+    if img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info:
+        img = img.convert("RGBA")
+        img = Image.alpha_composite(Image.new("RGBA", img.size, "white"), img)
+    return img.convert("L")
+
+
+def drop_specks(ink, min_px):
+    """Remove blobs of fewer than `min_px` pixels, keeping ones of exactly
+    min_px. (scikit-image's remove_small_objects changed where it draws that
+    line between versions, which can lose small dots like decimal points.)"""
+    blobs = label(ink, connectivity=1)
+    keep = np.bincount(blobs.ravel()) >= min_px
+    keep[0] = False  # background
+    return keep[blobs]
+
+
 def load_ink(path, min_width=2000, threshold=None, photo=False):
     """Threshold the ink. Small images are enlarged first so thin, faint pen
     lines stay joined up and keep enough pixels to trace."""
-    img = Image.open(path).convert("L")
+    img = open_grey(path)
     if photo:
         img = flatten_lighting(crop_to_paper(img))
     factor = max(1, int(np.ceil(min_width / img.width)))
@@ -56,8 +81,11 @@ def load_ink(path, min_width=2000, threshold=None, photo=False):
         img = img.resize((img.width * factor, img.height * factor), Image.BICUBIC)
     grey = np.asarray(img, dtype=float)
     ink = grey < (threshold if threshold else threshold_otsu(grey))
-    ink = binary_closing(ink, disk(1))
-    return remove_small_objects(ink, 4 * factor), factor
+    ink = closing(ink, disk(1))
+    ink = drop_specks(ink, min_px=4 * factor)
+    if not ink.any():
+        sys.exit("No ink found in %s. If the lines are faint, try --threshold 232." % path)
+    return ink, factor
 
 
 def split_small_marks(ink, max_px=7):
@@ -227,7 +255,8 @@ def main():
     # Trim the unused margin around the ink, then scale to fit the paper area.
     rows, cols = np.nonzero(ink)
     r0, c0 = rows.min(), cols.min()
-    scale = min(a.width / (cols.max() - c0), a.height / (rows.max() - r0))
+    # max(..., 1): ink that is a single row or column of pixels has no extent.
+    scale = min(a.width / max(cols.max() - c0, 1), a.height / max(rows.max() - r0, 1))
     height_mm = (rows.max() - r0) * scale
 
     mm_paths = []
@@ -248,7 +277,9 @@ def main():
         inside = lambda p: x0 <= p[:, 0].mean() <= x1 and y0 <= p[:, 1].mean() <= y1
         first = [p for p in mm_paths if not inside(p)]
         last = [p for p in mm_paths if inside(p)]
-    mm_paths = join_close(order_paths(first, gap=0.35), gap=0.35)
+    if not first and not last:
+        sys.exit("Nothing to draw: the ink in %s is too small to trace." % a.input)
+    mm_paths = join_close(order_paths(first, gap=0.35), gap=0.35) if first else []
     n_first = len(mm_paths)
     if last:
         mm_paths += join_close(order_paths(last, gap=0.35), gap=0.35)
